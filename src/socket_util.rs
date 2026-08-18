@@ -82,6 +82,12 @@ pub fn new_socket2_udp_socket_with_buffer_size(
         socket.bind(&SockAddr::from(bind_address))?;
     }
 
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "ffi"))]
+    {
+        use std::os::fd::AsRawFd;
+        let _ = crate::tun::protect_socket(socket.as_raw_fd());
+    }
+
     Ok(socket)
 }
 
@@ -108,6 +114,12 @@ pub fn new_tcp_socket(
     } else {
         tokio::net::TcpSocket::new_v4()?
     };
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "ffi"))]
+    {
+        use std::os::fd::AsRawFd;
+        let _ = crate::tun::protect_socket(tcp_socket.as_raw_fd());
+    }
 
     if let Some(_b) = bind_interface {
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]

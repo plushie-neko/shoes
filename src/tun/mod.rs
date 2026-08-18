@@ -51,6 +51,7 @@ use std::os::unix::io::IntoRawFd;
 use std::sync::Arc;
 
 use log::{debug, info, warn};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -206,7 +207,7 @@ async fn handle_tcp_connection(
             chain_group,
             remote_location,
         } => {
-            debug!(
+            info!(
                 "TCP: connecting to {} via chain",
                 remote_location.location()
             );
@@ -216,17 +217,23 @@ async fn handle_tcp_connection(
                 .await
             {
                 Ok(setup_result) => {
-                    debug!(
+                    info!(
                         "TCP: connected to {}, starting bidirectional copy",
                         remote_location.location()
                     );
 
                     let mut remote = setup_result.client_stream;
+                    if let Some(data) = setup_result.early_data {
+                        if let Err(e) = connection.write_all(&data).await {
+                            warn!("Failed to write early_data to TUN connection: {}", e);
+                            return Err(e);
+                        }
+                    }
                     let result = tokio::io::copy_bidirectional(&mut connection, &mut remote).await;
 
                     match result {
                         Ok((client_to_remote, remote_to_client)) => {
-                            debug!(
+                            info!(
                                 "TCP connection to {} completed: {} bytes sent, {} bytes received",
                                 remote_location.location(),
                                 client_to_remote,

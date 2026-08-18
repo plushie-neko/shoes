@@ -28,6 +28,7 @@ use crate::tcp::tcp_handler::{TcpClientHandler, TcpClientSetupResult};
 pub struct ProxyConnectorImpl {
     location: NetLocation,
     client_handler: Box<dyn TcpClientHandler>,
+    is_virtual: bool,
 }
 
 impl ProxyConnectorImpl {
@@ -39,6 +40,7 @@ impl ProxyConnectorImpl {
             return None;
         }
 
+        let is_virtual = matches!(config.protocol, crate::config::ClientProxyConfig::Dnstt { .. });
         let default_sni_hostname = config.address.address().hostname().map(ToString::to_string);
 
         Some(Self {
@@ -48,6 +50,7 @@ impl ProxyConnectorImpl {
                 default_sni_hostname,
                 resolver,
             ),
+            is_virtual,
         })
     }
 
@@ -57,6 +60,7 @@ impl ProxyConnectorImpl {
         Self {
             location,
             client_handler: handler,
+            is_virtual: false,
         }
     }
 }
@@ -65,6 +69,10 @@ impl ProxyConnectorImpl {
 impl ProxyConnector for ProxyConnectorImpl {
     fn proxy_location(&self) -> &NetLocation {
         &self.location
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.is_virtual
     }
 
     fn supports_udp_over_tcp(&self) -> bool {

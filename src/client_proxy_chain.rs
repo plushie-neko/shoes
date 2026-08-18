@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use log::debug;
 
 use crate::address::ResolvedLocation;
-use crate::async_stream::AsyncMessageStream;
+use crate::async_stream::{AsyncMessageStream, AsyncStream};
 use crate::resolver::Resolver;
 use crate::tcp::proxy_connector::ProxyConnector;
 use crate::tcp::socket_connector::SocketConnector;
@@ -277,14 +277,22 @@ impl ClientProxyChain {
                 }
             }
             InitialHopEntry::Proxy { socket, proxy } => {
-                // Socket connects to this proxy's location
-                debug!(
-                    "Initial hop: Proxy {} -> {}",
-                    proxy.proxy_location(),
-                    first_subsequent_target.location()
-                );
-                let proxy_loc = proxy.proxy_location().into();
-                let stream = socket.connect(resolver, &proxy_loc).await?;
+                let stream: Box<dyn AsyncStream> = if proxy.is_virtual() {
+                    debug!(
+                        "Initial hop: Virtual Proxy {} -> {}",
+                        proxy.proxy_location(),
+                        first_subsequent_target.location()
+                    );
+                    Box::new(crate::async_stream::DummyAsyncStream)
+                } else {
+                    debug!(
+                        "Initial hop: Proxy {} -> {}",
+                        proxy.proxy_location(),
+                        first_subsequent_target.location()
+                    );
+                    let proxy_loc = proxy.proxy_location().into();
+                    socket.connect(resolver, &proxy_loc).await?
+                };
                 // Protocol setup targeting first subsequent proxy (or final target)
                 proxy
                     .setup_tcp_stream(stream, &first_subsequent_target)
@@ -371,12 +379,20 @@ impl ClientProxyChain {
                     socket.connect_udp_bidirectional(resolver, target).await
                 }
                 InitialHopEntry::Proxy { socket, proxy } => {
-                    debug!(
-                        "Chain UDP: Proxy {} (UDP, no subsequent)",
-                        proxy.proxy_location()
-                    );
-                    let proxy_loc = proxy.proxy_location().into();
-                    let stream = socket.connect(resolver, &proxy_loc).await?;
+                    let stream: Box<dyn AsyncStream> = if proxy.is_virtual() {
+                        debug!(
+                            "Chain UDP: Virtual Proxy {} (UDP, no subsequent)",
+                            proxy.proxy_location()
+                        );
+                        Box::new(crate::async_stream::DummyAsyncStream)
+                    } else {
+                        debug!(
+                            "Chain UDP: Proxy {} (UDP, no subsequent)",
+                            proxy.proxy_location()
+                        );
+                        let proxy_loc = proxy.proxy_location().into();
+                        socket.connect(resolver, &proxy_loc).await?
+                    };
                     proxy.setup_udp_bidirectional(stream, target).await
                 }
             }
@@ -465,13 +481,22 @@ impl ClientProxyChain {
                             final_proxy.proxy_location().into()
                         };
 
-                    debug!(
-                        "Chain UDP: Proxy {} -> {} (TCP)",
-                        proxy.proxy_location(),
-                        first_target.location()
-                    );
-                    let proxy_loc = proxy.proxy_location().into();
-                    let stream = socket.connect(resolver, &proxy_loc).await?;
+                    let stream: Box<dyn AsyncStream> = if proxy.is_virtual() {
+                        debug!(
+                            "Chain UDP: Virtual Proxy {} -> {} (TCP)",
+                            proxy.proxy_location(),
+                            first_target.location()
+                        );
+                        Box::new(crate::async_stream::DummyAsyncStream)
+                    } else {
+                        debug!(
+                            "Chain UDP: Proxy {} -> {} (TCP)",
+                            proxy.proxy_location(),
+                            first_target.location()
+                        );
+                        let proxy_loc = proxy.proxy_location().into();
+                        socket.connect(resolver, &proxy_loc).await?
+                    };
                     let result = proxy.setup_tcp_stream(stream, &first_target).await?;
                     let mut stream = result.client_stream;
 

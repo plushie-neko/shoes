@@ -435,6 +435,13 @@ pub enum ClientProxyConfig {
         #[serde(default = "default_true", skip_serializing_if = "is_true")]
         padding: bool,
     },
+    /// DNSTT / NoizDNS client protocol
+    Dnstt {
+        #[serde(flatten)]
+        config: crate::dnstt::config::DnsttConfig,
+        #[serde(default)]
+        protocol: Option<Box<ClientProxyConfig>>,
+    },
 }
 
 impl ClientProxyConfig {
@@ -460,6 +467,7 @@ impl ClientProxyConfig {
             ClientProxyConfig::PortForward => "PortForward",
             ClientProxyConfig::Anytls { .. } => "AnyTLS",
             ClientProxyConfig::Naiveproxy { .. } => "NaiveProxy",
+            ClientProxyConfig::Dnstt { .. } => "DNSTT/NoizDNS",
         }
     }
 }

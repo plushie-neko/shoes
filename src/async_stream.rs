@@ -505,3 +505,49 @@ impl<T: ?Sized + AsyncWriteSessionMessage + Unpin> AsyncWriteSessionMessage for 
 
 impl<T: ?Sized + AsyncSessionMessageStream + Unpin> AsyncSessionMessageStream for Box<T> {}
 impl<T: ?Sized + AsyncSessionMessageStream + Unpin> AsyncSessionMessageStream for &mut T {}
+
+#[derive(Debug, Default, Clone)]
+pub struct DummyAsyncStream;
+
+impl AsyncRead for DummyAsyncStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for DummyAsyncStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncPing for DummyAsyncStream {
+    fn supports_ping(&self) -> bool {
+        false
+    }
+
+    fn poll_write_ping(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<bool>> {
+        Poll::Ready(Ok(false))
+    }
+}
+
+impl AsyncStream for DummyAsyncStream {}

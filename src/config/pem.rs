@@ -410,6 +410,15 @@ fn gather_pem_file_paths_from_client_proxy(
                 unknown_pem_paths,
             );
         }
+        ClientProxyConfig::Dnstt { protocol, .. } => {
+            if let Some(protocol) = protocol {
+                gather_pem_file_paths_from_client_proxy(
+                    protocol,
+                    known_pem_paths,
+                    unknown_pem_paths,
+                );
+            }
+        }
         _ => {}
     }
 }

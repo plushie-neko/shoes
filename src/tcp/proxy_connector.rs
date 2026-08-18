@@ -39,6 +39,12 @@ pub trait ProxyConnector: Send + Sync + Debug {
     /// when this is the first ProxyConnector in the chain.
     fn proxy_location(&self) -> &NetLocation;
 
+    /// Returns true if this proxy manages its own transport connection internally
+    /// (e.g. DNSTT tunnel) and does not require an underlying socket connection from SocketConnector.
+    fn is_virtual(&self) -> bool {
+        false
+    }
+
     /// Check if this connector supports UDP-over-TCP tunneling.
     fn supports_udp_over_tcp(&self) -> bool;
 

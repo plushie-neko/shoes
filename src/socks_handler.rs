@@ -501,37 +501,12 @@ async fn monitor_tcp_close(stream: &mut Box<dyn AsyncStream>) -> std::io::Result
 
 #[derive(Debug)]
 pub struct SocksTcpClientHandler {
-    prefix_data: Vec<u8>,
-    has_auth: bool,
+    auth_info: Option<(String, String)>,
 }
 
 impl SocksTcpClientHandler {
     pub fn new(auth_info: Option<(String, String)>) -> Self {
-        let mut data = vec![
-            VER_SOCKS5,
-            1, // number of methods,
-            if auth_info.is_some() {
-                METHOD_USERNAME
-            } else {
-                METHOD_NONE
-            },
-        ];
-        if let Some((username, password)) = auth_info.as_ref() {
-            data.extend(&[VER_AUTH, username.len() as u8]);
-            data.extend_from_slice(username.as_bytes());
-            data.push(password.len() as u8);
-            data.extend_from_slice(password.as_bytes());
-        }
-        data.extend(&[
-            VER_SOCKS5,
-            CMD_CONNECT,
-            0x0, // reserved
-        ]);
-
-        Self {
-            prefix_data: data,
-            has_auth: auth_info.is_some(),
-        }
+        Self { auth_info }
     }
 }
 
@@ -542,84 +517,115 @@ impl TcpClientHandler for SocksTcpClientHandler {
         mut client_stream: Box<dyn AsyncStream>,
         remote_location: ResolvedLocation,
     ) -> std::io::Result<TcpClientSetupResult> {
-        write_all(&mut client_stream, &self.prefix_data).await?;
-        let location_bytes = write_location_to_vec(remote_location.location());
-        write_all(&mut client_stream, &location_bytes).await?;
+        let has_auth = self.auth_info.is_some();
+        let method = if has_auth { METHOD_USERNAME } else { METHOD_NONE };
+
+        // 1. Send SOCKS5 greeting
+        let greeting = [VER_SOCKS5, 1, method];
+        client_stream.write_all(&greeting).await?;
         client_stream.flush().await?;
 
-        let mut stream_reader = StreamReader::new_with_buffer_size(400);
+        // 2. Read greeting response (2 bytes: VER, METHOD)
+        let mut greet_resp = [0u8; 2];
+        client_stream.read_exact(&mut greet_resp).await?;
 
-        let socks_version = stream_reader.read_u8(&mut client_stream).await?;
-        if socks_version != VER_SOCKS5 {
+        if greet_resp[0] != VER_SOCKS5 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("Unsupported SOCKS version: {socks_version}"),
+                format!("Unsupported SOCKS version: {}", greet_resp[0]),
             ));
         }
 
-        let auth_method = stream_reader.read_u8(&mut client_stream).await?;
-        if auth_method == METHOD_INVALID {
+        if greet_resp[1] == METHOD_INVALID {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "SOCKS server rejected auth method",
+                std::io::ErrorKind::PermissionDenied,
+                "SOCKS server rejected auth methods",
             ));
         }
 
-        if self.has_auth {
-            let auth_version = stream_reader.read_u8(&mut client_stream).await?;
-            if auth_version != VER_AUTH {
-                return Err(std::io::Error::new(
+        // 3. Perform username/password auth if required
+        if greet_resp[1] == METHOD_USERNAME {
+            let (username, password) = self.auth_info.as_ref().ok_or_else(|| {
+                std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "Unsupported SOCKS auth version",
+                    "SOCKS server requires auth but none provided",
+                )
+            })?;
+
+            let mut auth_req = Vec::with_capacity(3 + username.len() + password.len());
+            auth_req.push(VER_AUTH);
+            auth_req.push(username.len() as u8);
+            auth_req.extend_from_slice(username.as_bytes());
+            auth_req.push(password.len() as u8);
+            auth_req.extend_from_slice(password.as_bytes());
+
+            client_stream.write_all(&auth_req).await?;
+            client_stream.flush().await?;
+
+            let mut auth_resp = [0u8; 2];
+            client_stream.read_exact(&mut auth_resp).await?;
+
+            if auth_resp[1] != RESULT_SUCCESS {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("SOCKS auth failed: error {}", auth_resp[1]),
                 ));
             }
+        }
 
-            let auth_result = stream_reader.read_u8(&mut client_stream).await?;
-            if auth_result != RESULT_SUCCESS {
+        // 4. Send CONNECT command
+        let mut connect_req = vec![VER_SOCKS5, CMD_CONNECT, 0x00];
+        let location_bytes = write_location_to_vec(remote_location.location());
+        connect_req.extend_from_slice(&location_bytes);
+
+        client_stream.write_all(&connect_req).await?;
+        client_stream.flush().await?;
+
+        // 5. Read CONNECT response header (4 bytes: VER, REP, RSV, ATYP)
+        let mut conn_resp = [0u8; 4];
+        client_stream.read_exact(&mut conn_resp).await?;
+
+        if conn_resp[0] != VER_SOCKS5 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Unsupported SOCKS version in connect reply: {}", conn_resp[0]),
+            ));
+        }
+
+        if conn_resp[1] != RESULT_SUCCESS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("SOCKS server connect failed: code {}", conn_resp[1]),
+            ));
+        }
+
+        // Read bound address and port to consume them from the stream
+        match conn_resp[3] {
+            ADDR_TYPE_IPV4 => {
+                let mut v4 = [0u8; 6]; // 4 bytes IP + 2 bytes port
+                client_stream.read_exact(&mut v4).await?;
+            }
+            ADDR_TYPE_DOMAIN_NAME => {
+                let mut len_buf = [0u8; 1];
+                client_stream.read_exact(&mut len_buf).await?;
+                let mut domain_buf = vec![0u8; len_buf[0] as usize + 2]; // domain + 2 bytes port
+                client_stream.read_exact(&mut domain_buf).await?;
+            }
+            ADDR_TYPE_IPV6 => {
+                let mut v6 = [0u8; 18]; // 16 bytes IP + 2 bytes port
+                client_stream.read_exact(&mut v6).await?;
+            }
+            other => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("SOCKS server authentication failed: error {auth_result}"),
+                    format!("Unknown SOCKS address type: {}", other),
                 ));
             }
         }
-
-        let socks_version = stream_reader.read_u8(&mut client_stream).await?;
-        if socks_version != VER_SOCKS5 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Unsupported SOCKS version: {socks_version}"),
-            ));
-        }
-
-        let connect_response = stream_reader.read_u8(&mut client_stream).await?;
-        if connect_response != RESULT_SUCCESS {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("SOCKS server connect command failed: error {connect_response}"),
-            ));
-        }
-
-        let reserved = stream_reader.read_u8(&mut client_stream).await?;
-        if reserved != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "SOCKS server responded with invalid reserved bit",
-            ));
-        }
-
-        // Read the final location part of the connect response.
-        read_location(&mut client_stream, &mut stream_reader).await?;
-
-        let early_data = stream_reader.unparsed_data();
-        let early_data = if early_data.is_empty() {
-            None
-        } else {
-            Some(early_data.to_vec())
-        };
 
         Ok(TcpClientSetupResult {
             client_stream,
-            early_data,
+            early_data: None,
         })
     }
 }

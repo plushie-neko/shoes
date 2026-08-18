@@ -185,7 +185,7 @@ impl rustls::client::danger::ServerCertVerifier for DisabledVerifier {
     }
 }
 
-fn get_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+pub(crate) fn get_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     static INSTANCE: OnceLock<Arc<rustls::crypto::CryptoProvider>> = OnceLock::new();
     INSTANCE
         .get_or_init(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()))

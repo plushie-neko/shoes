@@ -862,6 +862,11 @@ fn validate_client_proxy_structure(config: &ClientProxyConfig) -> std::io::Resul
         ClientProxyConfig::Websocket(ws_config) => {
             validate_client_proxy_structure(&ws_config.protocol)?;
         }
+        ClientProxyConfig::Dnstt { protocol, .. } => {
+            if let Some(protocol) = protocol {
+                validate_client_proxy_structure(protocol)?;
+            }
+        }
         _ => {}
     }
     Ok(())

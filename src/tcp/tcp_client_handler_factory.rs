@@ -358,6 +358,13 @@ pub fn create_tcp_client_handler(
         } => Box::new(NaiveProxyTcpClientHandler::new(
             &username, &password, padding,
         )),
+        ClientProxyConfig::Dnstt { config, protocol } => {
+            let inner_handler: Box<dyn TcpClientHandler> = match protocol {
+                Some(inner_cfg) => create_tcp_client_handler(*inner_cfg, None, resolver.clone()),
+                None => Box::new(crate::socks_handler::SocksTcpClientHandler::new(None)),
+            };
+            Box::new(crate::dnstt::client::DnsttClient::new(config, inner_handler))
+        }
     }
 }
 

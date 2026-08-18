@@ -114,4 +114,14 @@ object ShoesNative {
      * @return true if the service is active.
      */
     external fun isRunning(): Boolean
+
+    /**
+     * Measure real outbound proxy delay to an HTTP 204 endpoint.
+     *
+     * @param configYaml YAML configuration string defining the outbound proxy chain.
+     * @param testUrl Target HTTP 204 URL (e.g. "http://cp.cloudflare.com/generate_204").
+     * @param timeoutMs Timeout in milliseconds.
+     * @return Latency in milliseconds (> 0) on success, -1 on failure/timeout.
+     */
+    external fun measureOutboundDelay(configYaml: String, testUrl: String, timeoutMs: Int): Long
 }

@@ -300,3 +300,180 @@ pub extern "system" fn Java_com_shoesproxy_ShoesNative_isRunning(
         JNI_FALSE
     }
 }
+
+/// Measures real outbound proxy delay to an HTTP 204 endpoint.
+async fn measure_outbound_delay_async(
+    config_yaml: &str,
+    test_url: &str,
+    timeout_ms: u64,
+) -> std::io::Result<i64> {
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::address::{Address, NetLocation};
+    use crate::client_proxy_selector::ConnectDecision;
+    use crate::config::selection::ConfigSelection;
+    use crate::config::{Config, convert_cert_paths, create_server_configs, load_config_str};
+    use crate::resolver::{NativeResolver, Resolver};
+    use crate::tcp::tcp_client_handler_factory::create_tcp_client_proxy_selector;
+
+    let parsed_url = url::Url::parse(test_url).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Invalid URL: {e}"))
+    })?;
+
+    let host = parsed_url
+        .host_str()
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Missing host in test URL")
+        })?
+        .to_string();
+
+    let port = parsed_url
+        .port()
+        .unwrap_or(if parsed_url.scheme() == "https" { 443 } else { 80 });
+    let path = if parsed_url.path().is_empty() {
+        "/generate_204"
+    } else {
+        parsed_url.path()
+    };
+
+    let configs = load_config_str(config_yaml)?;
+    let (configs, _) = convert_cert_paths(configs).await?;
+    let crate::config::ValidatedConfigs {
+        configs: validated_configs,
+        ..
+    } = create_server_configs(configs)?;
+
+    let rules = match validated_configs.into_iter().find_map(|c| match c {
+        Config::TunServer(tc) => Some(tc.rules.map(ConfigSelection::unwrap_config).into_vec()),
+        Config::Server(sc) => Some(sc.rules.map(ConfigSelection::unwrap_config).into_vec()),
+        _ => None,
+    }) {
+        Some(v) => v,
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No proxy rules found in config",
+            ));
+        }
+    };
+
+    let resolver: Arc<dyn Resolver> = Arc::new(NativeResolver::new());
+    let proxy_selector = Arc::new(create_tcp_client_proxy_selector(rules, resolver.clone()));
+    let start = Instant::now();
+
+    let target_address = Address::from(&host)?;
+    let target_location = NetLocation::new(target_address, port);
+
+    let decision = proxy_selector
+        .judge(target_location.into(), &resolver)
+        .await?;
+
+    let mut stream = match decision {
+        ConnectDecision::Allow {
+            chain_group,
+            remote_location,
+        } => {
+            let setup_result = tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                chain_group.connect_tcp(remote_location, &resolver),
+            )
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TCP connect timed out"))?
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    format!("Proxy connect failed: {e}"),
+                )
+            })?;
+            setup_result.client_stream
+        }
+        ConnectDecision::Block => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Target blocked by proxy rules",
+            ));
+        }
+    };
+
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: curl/7.88.1\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        stream.write_all(req.as_bytes()),
+    )
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "HTTP write timed out"))??;
+
+    let mut buf = [0u8; 512];
+    let n = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        stream.read(&mut buf),
+    )
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "HTTP read timed out"))??;
+
+    if n > 0 {
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        if resp.starts_with("HTTP/1.1 204")
+            || resp.starts_with("HTTP/1.1 200")
+            || resp.starts_with("HTTP/1.0 204")
+            || resp.starts_with("HTTP/1.0 200")
+            || resp.starts_with("HTTP/1.1 3")
+            || resp.starts_with("HTTP/1.0 3")
+        {
+            let elapsed = start.elapsed().as_millis() as i64;
+            return Ok(elapsed.max(1));
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "Invalid HTTP response from test URL",
+    ))
+}
+
+/// Measure real outbound proxy delay for a given config YAML and target URL.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_shoesproxy_ShoesNative_measureOutboundDelay<'local>(
+    mut unowned: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    config_yaml: JString<'local>,
+    test_url: JString<'local>,
+    timeout_ms: jint,
+) -> jlong {
+    let (config_str, url_str) = match unowned
+        .with_env(|_env| -> jni::errors::Result<(String, String)> {
+            Ok((config_yaml.to_string(), test_url.to_string()))
+        })
+        .into_outcome()
+    {
+        Outcome::Ok(pair) => pair,
+        _ => return -1,
+    };
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return -1,
+    };
+
+    let result = rt.block_on(measure_outbound_delay_async(
+        &config_str,
+        &url_str,
+        timeout_ms.max(500) as u64,
+    ));
+
+    match result {
+        Ok(latency) => latency as jlong,
+        Err(e) => {
+            log::debug!("measureOutboundDelay failed: {}", e);
+            -1
+        }
+    }
+}
+

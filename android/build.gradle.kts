@@ -26,7 +26,7 @@ android {
     sourceSets {
         getByName("main") {
             // JNI .so files built by cargo-ndk / build-android.sh
-            jniLibs.srcDirs("src/main/jniLibs")
+            jniLibs.directories.add("src/main/jniLibs")
         }
     }
 }

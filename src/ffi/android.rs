@@ -82,7 +82,7 @@ pub extern "system" fn Java_com_shoesproxy_ShoesNative_init<'local>(
     log_level: JString<'local>,
 ) -> jint {
     let level_str: String = match unowned
-        .with_env(|env| env.get_string(&log_level).map(|s| s.to_string()))
+        .with_env(|_env| -> jni::errors::Result<String> { Ok(log_level.to_string()) })
         .into_outcome()
     {
         Outcome::Ok(s) => s,
@@ -148,7 +148,7 @@ pub extern "system" fn Java_com_shoesproxy_ShoesNative_setLogFile<'local>(
     log_path: JString<'local>,
 ) -> jint {
     let path_str: String = match unowned
-        .with_env(|env| env.get_string(&log_path).map(|s| s.to_string()))
+        .with_env(|_env| -> jni::errors::Result<String> { Ok(log_path.to_string()) })
         .into_outcome()
     {
         Outcome::Ok(s) => s,
@@ -185,7 +185,7 @@ pub extern "system" fn Java_com_shoesproxy_ShoesNative_start<'local>(
     let result = unowned
         .with_env(
             |env| -> jni::errors::Result<(String, Global<JObject<'static>>, jni::JavaVM)> {
-                let config_str: String = env.get_string(&config_yaml).map(|s| s.to_string())?;
+                let config_str: String = config_yaml.to_string();
                 let callback_ref = env.new_global_ref(protect_callback)?;
                 let jvm = env.get_java_vm()?;
                 Ok((config_str, callback_ref, jvm))

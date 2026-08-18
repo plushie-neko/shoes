@@ -12,6 +12,7 @@ mod dns;
 mod dnstt;
 mod h2mux;
 mod http_handler;
+mod hysteria2_client;
 mod hysteria2_server;
 mod logging;
 mod mixed_handler;

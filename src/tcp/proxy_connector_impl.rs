@@ -40,13 +40,19 @@ impl ProxyConnectorImpl {
             return None;
         }
 
-        let is_virtual = matches!(config.protocol, crate::config::ClientProxyConfig::Dnstt { .. });
+        let is_virtual = matches!(
+            config.protocol,
+            crate::config::ClientProxyConfig::Dnstt { .. }
+                | crate::config::ClientProxyConfig::Hysteria2 { .. }
+        );
         let default_sni_hostname = config.address.address().hostname().map(ToString::to_string);
+        let location = config.address;
 
         Some(Self {
-            location: config.address,
+            location: location.clone(),
             client_handler: create_tcp_client_handler(
                 config.protocol,
+                Some(location),
                 default_sni_hostname,
                 resolver,
             ),

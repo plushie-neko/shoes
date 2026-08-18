@@ -41,6 +41,7 @@ fn create_auth_credentials(
 
 pub fn create_tcp_client_handler(
     client_proxy_config: ClientProxyConfig,
+    server_location: Option<crate::address::NetLocation>,
     default_sni_hostname: Option<String>,
     resolver: Arc<dyn Resolver>,
 ) -> Box<dyn TcpClientHandler> {
@@ -191,7 +192,7 @@ pub fn create_tcp_client_handler(
                     *udp_enabled,
                 ))
             } else {
-                let handler = create_tcp_client_handler(*protocol, None, resolver.clone());
+                let handler = create_tcp_client_handler(*protocol, None, None, resolver.clone());
 
                 Box::new(TlsClientHandler::new(
                     client_config,
@@ -253,7 +254,7 @@ pub fn create_tcp_client_handler(
                     ),
                 )
             } else {
-                let inner_handler = create_tcp_client_handler(*protocol, None, resolver.clone());
+                let inner_handler = create_tcp_client_handler(*protocol, None, None, resolver.clone());
                 Box::new(crate::reality_client_handler::RealityClientHandler::new(
                     public_key_bytes,
                     short_id_bytes,
@@ -290,7 +291,7 @@ pub fn create_tcp_client_handler(
                 true,       // tls13_only - required for ShadowTLS v3
             ));
 
-            let handler = create_tcp_client_handler(*protocol, None, resolver.clone());
+            let handler = create_tcp_client_handler(*protocol, None, None, resolver.clone());
 
             Box::new(ShadowTlsClientHandler::new(
                 password,
@@ -324,7 +325,7 @@ pub fn create_tcp_client_handler(
                 protocol,
             } = websocket_client_config;
 
-            let handler = create_tcp_client_handler(*protocol, None, resolver.clone());
+            let handler = create_tcp_client_handler(*protocol, None, None, resolver.clone());
 
             Box::new(WebsocketTcpClientHandler::new(
                 matching_path,
@@ -360,10 +361,34 @@ pub fn create_tcp_client_handler(
         )),
         ClientProxyConfig::Dnstt { config, protocol } => {
             let inner_handler: Box<dyn TcpClientHandler> = match protocol {
-                Some(inner_cfg) => create_tcp_client_handler(*inner_cfg, None, resolver.clone()),
+                Some(inner_cfg) => create_tcp_client_handler(*inner_cfg, None, None, resolver.clone()),
                 None => Box::new(crate::socks_handler::SocksTcpClientHandler::new(None)),
             };
             Box::new(crate::dnstt::client::DnsttClient::new(config, inner_handler))
+        }
+        ClientProxyConfig::Hysteria2 {
+            password,
+            udp_enabled,
+            sni_hostname,
+            verify,
+            alpn,
+            ports,
+            hop_interval_sec,
+        } => {
+            let loc = server_location.unwrap_or_else(|| {
+                crate::address::NetLocation::from_str("127.0.0.1:443", None).unwrap()
+            });
+            Box::new(crate::hysteria2_client::Hysteria2Client::new(
+                loc,
+                password,
+                udp_enabled,
+                sni_hostname.or(default_sni_hostname),
+                verify,
+                alpn,
+                ports,
+                hop_interval_sec,
+                resolver,
+            ))
         }
     }
 }

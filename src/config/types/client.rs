@@ -442,6 +442,23 @@ pub enum ClientProxyConfig {
         #[serde(default)]
         protocol: Option<Box<ClientProxyConfig>>,
     },
+    /// Hysteria2 client protocol
+    #[serde(alias = "hy2")]
+    Hysteria2 {
+        password: String,
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        udp_enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sni_hostname: Option<String>,
+        #[serde(default = "default_true")]
+        verify: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpn: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ports: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hop_interval_sec: Option<u64>,
+    },
 }
 
 impl ClientProxyConfig {
@@ -468,6 +485,7 @@ impl ClientProxyConfig {
             ClientProxyConfig::Anytls { .. } => "AnyTLS",
             ClientProxyConfig::Naiveproxy { .. } => "NaiveProxy",
             ClientProxyConfig::Dnstt { .. } => "DNSTT/NoizDNS",
+            ClientProxyConfig::Hysteria2 { .. } => "Hysteria2",
         }
     }
 }

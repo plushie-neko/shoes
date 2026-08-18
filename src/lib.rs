@@ -68,6 +68,7 @@ pub mod dns;
 pub mod dnstt;
 mod h2mux;
 mod http_handler;
+pub mod hysteria2_client;
 mod hysteria2_server;
 mod mixed_handler;
 mod naiveproxy;

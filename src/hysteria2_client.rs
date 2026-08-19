@@ -177,11 +177,22 @@ impl Hysteria2Client {
             let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
         });
 
+        let padding_str: String = {
+            let mut rng = rand::rng();
+            let length = rng.random_range(16..64);
+            rng.sample_iter(rand::distr::Alphanumeric)
+                .take(length)
+                .map(char::from)
+                .collect()
+        };
+
         let request = http::Request::builder()
+            .method("POST")
             .uri("https://hysteria/auth")
             .header("hysteria-auth", &self.password)
             .header("hysteria-udp", if self.udp_enabled { "true" } else { "false" })
             .header("hysteria-cc-rx", "0")
+            .header("hysteria-padding", padding_str)
             .body(())
             .map_err(|e| io::Error::other(format!("Failed to construct H3 auth request: {e}")))?;
 
@@ -200,7 +211,8 @@ impl Hysteria2Client {
             .await
             .map_err(|e| io::Error::other(format!("H3 auth response recv failed: {e}")))?;
 
-        if response.status() != http::StatusCode::OK {
+        let status = response.status().as_u16();
+        if status != 233 && status != 200 && !response.status().is_success() {
             return Err(io::Error::other(format!(
                 "Hysteria2 auth rejected by server: status {}",
                 response.status()

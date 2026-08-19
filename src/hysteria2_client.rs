@@ -169,13 +169,9 @@ impl Hysteria2Client {
 
         // Perform HTTP/3 authentication
         let h3_quinn_conn = h3_quinn::Connection::new(connection.clone());
-        let (mut driver, mut send_request) = h3::client::new(h3_quinn_conn)
+        let (driver, mut send_request) = h3::client::new(h3_quinn_conn)
             .await
             .map_err(|e| io::Error::other(format!("H3 client setup failed: {e}")))?;
-
-        tokio::spawn(async move {
-            let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
-        });
 
         let padding_str: String = {
             let mut rng = rand::rng();
@@ -218,6 +214,12 @@ impl Hysteria2Client {
                 response.status()
             )));
         }
+
+        // h3 connection wrapper closes the underlying quinn connection when dropped.
+        // Forget driver and send_request so the underlying QUIC session remains open
+        // for subsequent raw QUIC bidirectional streams (TCP proxying) and datagrams.
+        std::mem::forget(driver);
+        std::mem::forget(send_request);
 
         info!("Hysteria2 connection and auth successfully established with {}", self.server_location);
 

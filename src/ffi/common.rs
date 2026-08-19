@@ -92,18 +92,9 @@ pub fn stop_service() {
             let _ = tx.send(());
         }
 
-        // Wait up to 5 seconds for service to stop
-        let running = handle.running.clone();
-        for i in 0..50 {
-            if !running.load(Ordering::SeqCst) {
-                info!("TUN service stopped after {}ms", i * 100);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        drop(handle.runtime);
-        info!("TUN runtime dropped");
+        handle.running.store(false, Ordering::SeqCst);
+        handle.runtime.shutdown_background();
+        info!("TUN runtime shut down in background");
     }
 
     info!("TUN service stop completed");

@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::ready;
-use log::warn;
+use log::{debug, warn};
 use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -44,6 +44,7 @@ enum ReadState {
     ReadBinaryContent,
     ReadPingContent,
     SkipContent,
+    Closed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -302,7 +303,11 @@ impl WebsocketStream {
                 self.read_state = ReadState::Init;
                 self.step_init(cx, buf)
             }
-            // TODO: handle close frames
+            OpCode::Close => {
+                debug!("Received WebSocket close frame (len: {})", self.read_frame_length);
+                self.read_state = ReadState::Closed;
+                Ok(())
+            }
             _ => {
                 warn!("Ignoring unknown frame type: {:?}", self.read_frame_opcode);
                 if self.read_frame_length == 0 {
@@ -571,6 +576,10 @@ impl AsyncRead for WebsocketStream {
     ) -> std::task::Poll<std::io::Result<()>> {
         let this = self.get_mut();
 
+        if this.read_state == ReadState::Closed {
+            return Poll::Ready(Ok(()));
+        }
+
         // If there is unprocessed data and we are reading content, it must be because there
         // is data still to be read, but the passed in `buf` from the previous iteration
         // didn't have enough space to read it all.
@@ -584,6 +593,10 @@ impl AsyncRead for WebsocketStream {
         }
 
         loop {
+            if this.read_state == ReadState::Closed {
+                return Poll::Ready(Ok(()));
+            }
+
             // Reset the offset if we have less than half the buffer left to use.
             if this.unprocessed_start_offset * 2 > this.unprocessed_buf.len() {
                 this.reset_unprocessed_buf_offset();
@@ -626,10 +639,15 @@ impl AsyncRead for WebsocketStream {
                 ReadState::SkipContent => this.step_skip_content(cx, buf),
                 ReadState::ReadBinaryContent => this.step_read_binary_content(cx, buf),
                 ReadState::ReadPingContent => this.step_read_ping_content(cx, buf),
+                ReadState::Closed => Ok(()),
             };
 
             if read_result.is_err() {
                 return Poll::Ready(read_result);
+            }
+
+            if this.read_state == ReadState::Closed {
+                return Poll::Ready(Ok(()));
             }
 
             if !buf.filled().is_empty() {
@@ -825,3 +843,41 @@ fn pack_frame(opcode: u8, use_mask: bool, input: &[u8], output: &mut [u8]) -> us
 
     offset + input_len
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::async_stream::DummyAsyncStream;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn test_websocket_close_frame_handling() {
+        let close_frame = [0x88, 0x00];
+        let mut ws = WebsocketStream::new(
+            Box::new(DummyAsyncStream),
+            true,
+            WebsocketPingType::Disabled,
+            &close_frame,
+        );
+
+        let mut buf = [0u8; 1024];
+        let n = ws.read(&mut buf).await.unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn test_websocket_close_frame_with_payload() {
+        let close_frame = [0x88, 0x02, 0x03, 0xe8];
+        let mut ws = WebsocketStream::new(
+            Box::new(DummyAsyncStream),
+            true,
+            WebsocketPingType::Disabled,
+            &close_frame,
+        );
+
+        let mut buf = [0u8; 1024];
+        let n = ws.read(&mut buf).await.unwrap();
+        assert_eq!(n, 0);
+    }
+}
+

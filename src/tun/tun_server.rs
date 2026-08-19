@@ -57,6 +57,9 @@ pub struct TunServerConfig {
     /// Enable ICMP (ping) handling.
     /// Default: true
     pub icmp_enabled: bool,
+    /// Block QUIC (UDP 443) packets.
+    /// Default: false
+    pub block_quic: bool,
     /// TUN device name.
     /// - **Linux**: Used to name the TUN device (e.g., "tun0")
     /// - **Android/iOS**: Ignored (device is provided via FD)
@@ -111,6 +114,7 @@ impl Default for TunServerConfig {
             tcp_enabled: true,
             udp_enabled: true,
             icmp_enabled: true,
+            block_quic: false,
             tun_name: None,
             address: None,
             netmask: None,
@@ -203,6 +207,12 @@ impl TunServerConfig {
     /// Enable or disable ICMP (ping) handling.
     pub fn icmp_enabled(mut self, enabled: bool) -> Self {
         self.icmp_enabled = enabled;
+        self
+    }
+
+    /// Block or allow QUIC (UDP 443) packets.
+    pub fn block_quic(mut self, block_quic: bool) -> Self {
+        self.block_quic = block_quic;
         self
     }
 

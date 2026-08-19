@@ -2046,6 +2046,7 @@ mod tests {
             tcp_enabled: false, // TCP disabled
             udp_enabled: true,
             icmp_enabled: true, // but ICMP enabled - should fail
+            block_quic: false,
             rules: NoneOrSome::Unspecified,
             dns: None,
         };

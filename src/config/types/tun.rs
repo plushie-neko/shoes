@@ -98,6 +98,11 @@ pub struct TunConfig {
     #[serde(default = "default_true")]
     pub icmp_enabled: bool,
 
+    /// Block QUIC (UDP 443) packets.
+    /// Default: false
+    #[serde(default)]
+    pub block_quic: bool,
+
     /// Routing rules for traffic coming through the TUN device.
     /// Default: Allow all traffic directly
     #[serde(

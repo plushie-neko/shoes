@@ -67,6 +67,7 @@ pub struct TunUdpManager {
     sessions: LruCache<SocketAddr, Session>,
     proxy_selector: Arc<ClientProxySelector>,
     resolver: Arc<dyn Resolver>,
+    block_quic: bool,
     /// Receives responses from destination tasks (across all sessions)
     response_rx: mpsc::Receiver<UdpMessage>,
     /// Cloned into each session, then into each destination task
@@ -96,6 +97,7 @@ impl TunUdpManager {
         writer: UdpWriter,
         proxy_selector: Arc<ClientProxySelector>,
         resolver: Arc<dyn Resolver>,
+        block_quic: bool,
     ) -> Self {
         let (response_tx, response_rx) = mpsc::channel(RESPONSE_CHANNEL_SIZE);
 
@@ -105,6 +107,7 @@ impl TunUdpManager {
             sessions: LruCache::new(NonZeroUsize::new(MAX_SESSIONS).unwrap()),
             proxy_selector,
             resolver,
+            block_quic,
             response_rx,
             response_tx,
         }
@@ -171,6 +174,14 @@ impl TunUdpManager {
         remote_addr: SocketAddr,
         payload: Vec<u8>,
     ) -> io::Result<()> {
+        if self.block_quic && remote_addr.port() == 443 {
+            debug!(
+                "[TunUdpManager] Dropping QUIC (UDP 443) packet: {} -> {}",
+                local_addr, remote_addr
+            );
+            return Ok(());
+        }
+
         if let Some(session) = self.sessions.get_mut(&local_addr) {
             session.last_active = Instant::now();
 
@@ -534,3 +545,33 @@ async fn send_message(stream: &mut Box<dyn AsyncMessageStream>, data: &[u8]) -> 
     std::future::poll_fn(|cx| Pin::new(&mut **stream).poll_flush_message(cx)).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_proxy_selector::ClientProxySelector;
+    use crate::resolver::NativeResolver;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_block_quic_drops_udp_443() {
+        let (_from_tun_tx, from_tun_rx) = mpsc::unbounded_channel();
+        let (to_tun_tx, _to_tun_rx) = mpsc::unbounded_channel();
+        let udp_handler = super::super::udp_handler::UdpHandler::new(from_tun_rx, to_tun_tx);
+        let (reader, writer) = udp_handler.split();
+
+        let resolver = Arc::new(NativeResolver::new());
+        let selector = Arc::new(ClientProxySelector::new(vec![]));
+
+        let mut manager = TunUdpManager::new(reader, writer, selector, resolver, true);
+
+        let local_addr = "10.0.0.1:12345".parse().unwrap();
+        let quic_remote_addr = "142.250.186.46:443".parse().unwrap();
+        let payload = vec![0x01, 0x02, 0x03];
+
+        let res = manager.handle_packet(local_addr, quic_remote_addr, payload);
+        assert!(res.is_ok());
+        assert_eq!(manager.sessions.len(), 0);
+    }
+}
+

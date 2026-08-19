@@ -143,12 +143,20 @@ pub async fn run_tun_server(
         None
     };
 
+    let block_quic = config.block_quic;
     let udp_task = if config.udp_enabled {
         let proxy_selector = proxy_selector.clone();
         let resolver = resolver.clone();
 
         Some(tokio::spawn(async move {
-            handle_udp_packets(udp_from_stack_rx, udp_to_stack_tx, proxy_selector, resolver).await;
+            handle_udp_packets(
+                udp_from_stack_rx,
+                udp_to_stack_tx,
+                proxy_selector,
+                resolver,
+                block_quic,
+            )
+            .await;
         }))
     } else {
         None
@@ -275,13 +283,14 @@ async fn handle_udp_packets(
     to_stack_tx: mpsc::UnboundedSender<PacketBuffer>,
     proxy_selector: Arc<ClientProxySelector>,
     resolver: Arc<dyn Resolver>,
+    block_quic: bool,
 ) {
-    info!("Starting UDP handler (session-based)");
+    info!("Starting UDP handler (session-based, block_quic={})", block_quic);
 
     let udp_handler = udp_handler::UdpHandler::new(from_stack_rx, to_stack_tx);
     let (reader, writer) = udp_handler.split();
 
-    let manager = TunUdpManager::new(reader, writer, proxy_selector, resolver);
+    let manager = TunUdpManager::new(reader, writer, proxy_selector, resolver, block_quic);
 
     if let Err(e) = manager.run().await {
         warn!("UDP handler error: {}", e);
@@ -318,6 +327,7 @@ pub async fn run_tun_from_config(
         .tcp_enabled(config.tcp_enabled)
         .udp_enabled(config.udp_enabled)
         .icmp_enabled(config.icmp_enabled)
+        .block_quic(config.block_quic)
         .close_fd_on_drop(close_fd_on_drop);
 
     if let Some(ref name) = config.device_name {
